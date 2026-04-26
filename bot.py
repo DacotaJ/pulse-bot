@@ -20,7 +20,6 @@ logging.basicConfig(level=logging.INFO)
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
-# Читаем ключ из переменной окружения Railway (безопасно — не попадает в GitHub)
 _creds_json = os.environ.get("GOOGLE_CREDS_JSON", "{}")
 CREDS_INFO = json.loads(_creds_json)
 
@@ -288,7 +287,7 @@ def save_lead(username, first_name, niche):
         f"@{username}" if username else "нет ника",
         first_name or "",
         NICHES.get(niche, {}).get("name", niche),
-        "bot_demo_v3"
+        "bot_demo_v4"
     ])
 
 
@@ -317,7 +316,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
          InlineKeyboardButton("👥 HR / Рекрутинг", callback_data="hr")],
     ]
     user = update.message.from_user
-    # Запись в Sheets при /start
     save_to_sheet([
         datetime.now().strftime("%d.%m.%Y %H:%M"),
         f"@{user.username}" if user.username else "нет ника",
@@ -325,7 +323,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "—",
         "bot_start"
     ])
-    # Уведомление владельцу
     if YOUR_CHAT_ID:
         try:
             await context.bot.send_message(
@@ -354,7 +351,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     niche = query.data
     chat_id = query.message.chat_id
 
-    # Настройки — обрабатываем первыми
+    # Настройки
     if niche == "settings_demo":
         await show_settings(chat_id, context)
         return
@@ -363,8 +360,50 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await handle_settings(niche, chat_id, context)
         return
 
-    if niche in ("mode_full", "mode_report", "mode_alerts", "freq_1", "freq_2", "freq_3", "threshold_3", "threshold_5", "threshold_10", "team_yes", "team_no"):
+    if niche in ("mode_full", "mode_report", "mode_alerts", "freq_1", "freq_2", "freq_3",
+                 "threshold_3", "threshold_5", "threshold_10", "team_yes", "team_no"):
         await handle_settings(niche, chat_id, context)
+        return
+
+    # Кнопки алертов
+    if niche == "alert_snooze":
+        await send(chat_id, context,
+            "🔕 <b>Напомню через час</b>\n\n"
+            "Поставил напоминание на 12:34.\n"
+            "Если не обработаете — пришлю снова.",
+            delay=0.5)
+        return
+
+    if niche == "alert_done":
+        await send(chat_id, context,
+            "✅ <b>Отлично!</b>\n\n"
+            "Заявка отмечена как обработанная.\n"
+            "Так держать — ни один клиент не потерян 💪",
+            delay=0.5)
+        return
+
+    if niche == "alert_show_all":
+        await send(chat_id, context,
+            "📋 <b>Необработанные заявки:</b>\n"
+            "━━━━━━━━━━━━━━━━\n"
+            "1. Марина К. — ждёт 3 часа · 15 200 ₽\n"
+            "2. Сергей П. — ждёт 2.5 часа · 15 200 ₽\n"
+            "3. Анна В. — ждёт 2 часа · 15 200 ₽\n"
+            "4. Дмитрий Л. — ждёт 1.5 часа · 15 200 ₽\n"
+            "5. Ольга М. — ждёт 1 час · 15 200 ₽\n"
+            "━━━━━━━━━━━━━━━━\n"
+            "⚠️ В реальном боте — ваши данные из CRM",
+            delay=0.8)
+        return
+
+    # Тарифы
+    if niche in ("tariff_start", "tariff_business"):
+        await send(chat_id, context,
+            "🔗 <b>Ссылка на оплату</b>\n\n"
+            "Оплата будет доступна в ближайшее время.\n\n"
+            "Пока можете написать напрямую 👇",
+            keyboard=[[InlineKeyboardButton("✍️ Написать напрямую", url=YOUR_TG)]],
+            delay=0.5)
         return
 
     user = query.from_user
@@ -372,7 +411,6 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     save_lead(user.username, user.first_name, niche)
 
-    # Уведомление владельцу при нажатии ниши
     if YOUR_CHAT_ID:
         try:
             niche_name = NICHES.get(niche, {}).get("name", niche)
@@ -390,21 +428,29 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await send(chat_id, context, data["report"], delay=2.5)
 
-    # === АКТ 2: Алерт ===
-    await send(chat_id, context, data["alert"], delay=2.0)
+    # === АКТ 2: Большой алерт (сводный) ===
+    alert_keyboard = [
+        [InlineKeyboardButton("📋 Показать всех", callback_data="alert_show_all")],
+        [InlineKeyboardButton("🔕 Отложить на 1 час", callback_data="alert_snooze")],
+    ]
+    await send(chat_id, context, data["alert"], keyboard=alert_keyboard, delay=2.0)
 
-    # === АКТ 3: Кейс — социальное доказательство ===
+    # === АКТ 3: Кейс ===
     await send(chat_id, context,
         f"💡 <b>Кейс из вашей ниши:</b>\n\n<i>{data['case']}</i>",
         delay=2.5)
 
-    # === АКТ 4: Алерт в реальном времени ===
+    # === АКТ 4: Персональный алерт ===
     await send(chat_id, context,
         "⏰ А теперь представьте...\n\n"
         "Вы на встрече. 11:30. И вдруг приходит это:",
         delay=2.0)
 
-    await send(chat_id, context, data["realtime_alert"], delay=1.5)
+    realtime_keyboard = [
+        [InlineKeyboardButton("✅ Обработано", callback_data="alert_done")],
+        [InlineKeyboardButton("🔕 Отложить на 1 час", callback_data="alert_snooze")],
+    ]
+    await send(chat_id, context, data["realtime_alert"], keyboard=realtime_keyboard, delay=1.5)
 
     await send(chat_id, context,
         "Вы узнали о потере <b>до того</b>, как клиент ушёл.\n"
@@ -418,7 +464,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await send(chat_id, context, data["weekly"], delay=1.5)
 
-    # === АКТ 6: Настройки — имитация ===
+    # === АКТ 6: Настройки ===
     await send(chat_id, context,
         "⚙️ И всё это настраивается прямо в боте — без звонков и заявок:",
         delay=2.5)
@@ -501,7 +547,6 @@ async def handle_settings(niche, chat_id, context):
     await send(chat_id, context, r["text"],
                keyboard=r.get("keyboard"), delay=0.8)
 
-    # После любого выбора настройки — финальный оффер
     if r.get("final"):
         await asyncio.sleep(2)
         await show_final_offer(chat_id, context)
@@ -523,6 +568,62 @@ async def show_final_offer(chat_id, context):
         "Первый отчёт — бесплатно.</b>",
         keyboard=keyboard,
         delay=1.5)
+
+    await asyncio.sleep(2)
+    await show_tariffs(chat_id, context)
+
+
+async def show_tariffs(chat_id, context):
+    await typing(chat_id, context, 1.0)
+    await context.bot.send_message(
+        chat_id=chat_id,
+        text=(
+            "💎 <b>START · 7 000 ₽/мес</b>\n"
+            "━━━━━━━━━━━━━━━━\n"
+            "— Ежедневный отчёт в Telegram\n"
+            "— До 2 алертов\n"
+            "— 1 источник данных\n"
+            "— Запуск за 1–3 дня"
+        ),
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("Выбрать START →", callback_data="tariff_start")]
+        ])
+    )
+
+    await asyncio.sleep(1.5)
+    await context.bot.send_message(
+        chat_id=chat_id,
+        text=(
+            "⭐ <b>BUSINESS · 15 000 ₽/мес</b>\n"
+            "━━━━━━━━━━━━━━━━\n"
+            "— Всё из START\n"
+            "— До 5 алертов\n"
+            "— До 3 источников данных\n"
+            "— Ежемесячные доработки"
+        ),
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("Выбрать BUSINESS →", callback_data="tariff_business")]
+        ])
+    )
+
+    await asyncio.sleep(1.5)
+    await context.bot.send_message(
+        chat_id=chat_id,
+        text=(
+            "🚀 <b>PRO · 25 000 ₽/мес</b>\n"
+            "━━━━━━━━━━━━━━━━\n"
+            "— Всё из BUSINESS\n"
+            "— Кастомные метрики\n"
+            "— Любое число источников\n"
+            "— Разбор метрик с командой"
+        ),
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("Обсудить PRO →", url=YOUR_TG)]
+        ])
+    )
 
 
 def main():
