@@ -466,7 +466,8 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # === АКТ 6: Настройки ===
     await send(chat_id, context,
-        "⚙️ И всё это настраивается прямо в боте — без звонков и заявок:",
+        "⚙️ И всё это настраивается прямо в боте.\nНажмите любую кнопку ниже — и увидите финал 👇\n\n"
+        "👇 Нажмите любую кнопку ниже — и увидите финал демо",
         delay=2.5)
 
     await show_settings(chat_id, context)
