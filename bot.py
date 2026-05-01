@@ -2,19 +2,24 @@ import logging
 import asyncio
 import os
 import json
+import httpx
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 from telegram.constants import ChatAction
 import gspread
 from google.oauth2.service_account import Credentials
 from datetime import datetime
+from aiohttp import web
 
 # --- НАСТРОЙКИ ---
 BOT_TOKEN = "8564626704:AAH4u4qTJhmfg5qJGCIcZoSvl7gI6uJir3g"
 SPREADSHEET_ID = "1hNQfcs-Zk2ZjanjuZP1yZDlPc3ADNbp0s9In_kFSHu4"
 SHEET_NAME = "Лиды с бота"
-YOUR_TG = "https://t.me/ТВОЙ_НИК"  # замени на свой ник
-YOUR_CHAT_ID = None  # замени на свой Telegram ID (узнай у @userinfobot)
+YOUR_TG = "https://t.me/ТВОЙ_НИК"
+YOUR_CHAT_ID = None
+
+# Anthropic API ключ — берётся из переменных Railway
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 
 logging.basicConfig(level=logging.INFO)
 
@@ -351,7 +356,6 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     niche = query.data
     chat_id = query.message.chat_id
 
-    # Настройки
     if niche == "settings_demo":
         await show_settings(chat_id, context)
         return
@@ -365,7 +369,6 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await handle_settings(niche, chat_id, context)
         return
 
-    # Кнопки алертов
     if niche == "alert_snooze":
         await send(chat_id, context,
             "🔕 <b>Напомню через час</b>\n\n"
@@ -396,7 +399,6 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             delay=0.8)
         return
 
-    # Тарифы
     if niche in ("tariff_start", "tariff_business"):
         await send(chat_id, context,
             "🔗 <b>Ссылка на оплату</b>\n\n"
@@ -421,26 +423,22 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logging.error(f"Notify error: {e}")
 
-    # === АКТ 1: Утренний отчёт ===
     await send(chat_id, context,
         "☀️ <b>Доброе утро!</b>\n\nСобираю данные вашего бизнеса за вчера...",
         delay=1.5)
 
     await send(chat_id, context, data["report"], delay=2.5)
 
-    # === АКТ 2: Большой алерт (сводный) ===
     alert_keyboard = [
         [InlineKeyboardButton("📋 Показать всех", callback_data="alert_show_all")],
         [InlineKeyboardButton("🔕 Отложить на 1 час", callback_data="alert_snooze")],
     ]
     await send(chat_id, context, data["alert"], keyboard=alert_keyboard, delay=2.0)
 
-    # === АКТ 3: Кейс ===
     await send(chat_id, context,
         f"💡 <b>Кейс из вашей ниши:</b>\n\n<i>{data['case']}</i>",
         delay=2.5)
 
-    # === АКТ 4: Персональный алерт ===
     await send(chat_id, context,
         "⏰ А теперь представьте...\n\n"
         "Вы на встрече. 11:30. И вдруг приходит это:",
@@ -457,14 +455,12 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Не вечером. Не в пятницу. Прямо сейчас.",
         delay=2.0)
 
-    # === АКТ 5: Еженедельная сводка ===
     await send(chat_id, context,
         "📅 А каждое воскресенье вечером приходит итог недели:",
         delay=2.5)
 
     await send(chat_id, context, data["weekly"], delay=1.5)
 
-    # === АКТ 6: Настройки ===
     await send(chat_id, context,
         "⚙️ И всё это настраивается прямо в боте.\nНажмите любую кнопку ниже — и увидите финал 👇\n\n"
         "👇 Нажмите любую кнопку ниже — и увидите финал демо",
@@ -581,7 +577,7 @@ async def show_tariffs(chat_id, context):
         text=(
             "💎 <b>START · 7 000 ₽/мес</b>\n"
             "━━━━━━━━━━━━━━━━\n"
-            "— Ежедневный отчёт в Telegram\n"
+            "— Ежедневный отчёт каждое утро в 09:00\n"
             "— До 2 алертов\n"
             "— 1 источник данных\n"
             "— Запуск за 1–3 дня"
@@ -599,9 +595,9 @@ async def show_tariffs(chat_id, context):
             "⭐ <b>BUSINESS · 15 000 ₽/мес</b>\n"
             "━━━━━━━━━━━━━━━━\n"
             "— Всё из START\n"
-            "— До 5 алертов\n"
-            "— До 3 источников данных\n"
-            "— Ежемесячные доработки"
+            "— До 5 алертов, 3 источника\n"
+            "— Личный кабинет с историей\n"
+            "— AI отвечает на вопросы по вашим данным"
         ),
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup([
@@ -616,9 +612,9 @@ async def show_tariffs(chat_id, context):
             "🚀 <b>PRO · 25 000 ₽/мес</b>\n"
             "━━━━━━━━━━━━━━━━\n"
             "— Всё из BUSINESS\n"
-            "— Кастомные метрики\n"
-            "— Любое число источников\n"
-            "— Разбор метрик с командой"
+            "— AI сам замечает проблемы и говорит что делать\n"
+            "— Несколько направлений и филиалов\n"
+            "— Дашборд, PDF-отчёты, еженедельный созвон"
         ),
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup([
@@ -627,11 +623,74 @@ async def show_tariffs(chat_id, context):
     )
 
 
+# ── CLAUDE API ПРОКСИ ──
+async def claude_proxy(request):
+    """Принимает запросы из Mini App и передаёт в Claude API с ключом"""
+    if request.method == "OPTIONS":
+        return web.Response(
+            headers={
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": "POST, OPTIONS",
+                "Access-Control-Allow-Headers": "Content-Type",
+            }
+        )
+
+    try:
+        body = await request.json()
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "Content-Type": "application/json",
+                    "x-api-key": ANTHROPIC_API_KEY,
+                    "anthropic-version": "2023-06-01",
+                },
+                json=body,
+            )
+        return web.Response(
+            body=resp.content,
+            content_type="application/json",
+            headers={"Access-Control-Allow-Origin": "*"},
+        )
+    except Exception as e:
+        logging.error(f"Claude proxy error: {e}")
+        return web.Response(
+            status=500,
+            text=json.dumps({"error": str(e)}),
+            content_type="application/json",
+            headers={"Access-Control-Allow-Origin": "*"},
+        )
+
+
+async def health(request):
+    return web.Response(text="OK")
+
+
+async def run_web():
+    app = web.Application()
+    app.router.add_post("/claude", claude_proxy)
+    app.router.add_route("OPTIONS", "/claude", claude_proxy)
+    app.router.add_get("/health", health)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.environ.get("PORT", 8080))
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    logging.info(f"Web server started on port {port}")
+
+
 def main():
-    app = Application.builder().token(BOT_TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(button))
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+    async def run_all():
+        await run_web()
+        app = Application.builder().token(BOT_TOKEN).build()
+        app.add_handler(CommandHandler("start", start))
+        app.add_handler(CallbackQueryHandler(button))
+        await app.initialize()
+        await app.start()
+        await app.updater.start_polling(allowed_updates=Update.ALL_TYPES)
+        await asyncio.Event().wait()
+
+    asyncio.run(run_all())
 
 
 if __name__ == "__main__":
