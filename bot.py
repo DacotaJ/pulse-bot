@@ -21,6 +21,10 @@ YOUR_CHAT_ID = None
 # Anthropic API ключ — берётся из переменных Railway
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 
+# ЮКасса — берётся из переменных Railway
+YUKASSA_SHOP_ID = os.environ.get("YUKASSA_SHOP_ID", "1345951")
+YUKASSA_SECRET_KEY = os.environ.get("YUKASSA_SECRET_KEY", "")
+
 logging.basicConfig(level=logging.INFO)
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
@@ -623,6 +627,69 @@ async def show_tariffs(chat_id, context):
     )
 
 
+async def create_payment(request):
+    """Создаёт платёж в ЮКассе и возвращает confirmation_token для виджета"""
+    if request.method == "OPTIONS":
+        return web.Response(
+            headers={
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": "POST, OPTIONS",
+                "Access-Control-Allow-Headers": "Content-Type",
+            }
+        )
+
+    try:
+        body = await request.json()
+        amount = body.get("amount", 7000)
+        description = body.get("description", "Pulse подписка")
+
+        import uuid
+        idempotence_key = str(uuid.uuid4())
+
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(
+                "https://api.yookassa.ru/v3/payments",
+                auth=(YUKASSA_SHOP_ID, YUKASSA_SECRET_KEY),
+                headers={
+                    "Content-Type": "application/json",
+                    "Idempotence-Key": idempotence_key,
+                },
+                json={
+                    "amount": {"value": str(amount) + ".00", "currency": "RUB"},
+                    "confirmation": {"type": "embedded"},
+                    "capture": True,
+                    "description": description,
+                },
+            )
+
+        data = resp.json()
+        confirmation_token = data.get("confirmation", {}).get("confirmation_token")
+
+        if not confirmation_token:
+            logging.error(f"YooKassa error: {data}")
+            return web.Response(
+                status=500,
+                text=json.dumps({"error": "Не удалось создать платёж", "details": data}),
+                content_type="application/json",
+                headers={"Access-Control-Allow-Origin": "*"},
+            )
+
+        return web.Response(
+            text=json.dumps({"confirmation_token": confirmation_token}),
+            content_type="application/json",
+            headers={"Access-Control-Allow-Origin": "*"},
+        )
+
+    except Exception as e:
+        logging.error(f"Payment error: {e}")
+        return web.Response(
+            status=500,
+            text=json.dumps({"error": str(e)}),
+            content_type="application/json",
+            headers={"Access-Control-Allow-Origin": "*"},
+        )
+
+
 # ── CLAUDE API ПРОКСИ ──
 async def claude_proxy(request):
     """Принимает запросы из Mini App и передаёт в Claude API с ключом"""
@@ -670,6 +737,8 @@ async def run_web():
     app = web.Application()
     app.router.add_post("/claude", claude_proxy)
     app.router.add_route("OPTIONS", "/claude", claude_proxy)
+    app.router.add_post("/create-payment", create_payment)
+    app.router.add_route("OPTIONS", "/create-payment", create_payment)
     app.router.add_get("/health", health)
     runner = web.AppRunner(app)
     await runner.setup()
