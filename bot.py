@@ -285,7 +285,8 @@ def save_to_sheet(row):
         creds = Credentials.from_service_account_info(CREDS_INFO, scopes=SCOPES)
         client = gspread.authorize(creds)
         sheet = client.open_by_key(SPREADSHEET_ID).worksheet(SHEET_NAME)
-        sheet.append_row(row)
+        # Всегда добавляем новую строку в конец
+        sheet.append_row(row, value_input_option="USER_ENTERED", insert_data_option="INSERT_ROWS")
     except Exception as e:
         logging.error(f"Sheets error: {e}")
 
@@ -296,34 +297,11 @@ def save_lead(username, first_name, niche):
         f"@{username}" if username else "нет ника",
         first_name or "",
         NICHES.get(niche, {}).get("name", niche),
-        "bot_demo_v4"
+        "bot_start"
     ])
 
 
-async def typing(chat_id, context, seconds=1.5):
-    await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
-    await asyncio.sleep(seconds)
-
-
-async def send(chat_id, context, text, keyboard=None, delay=1.5):
-    await typing(chat_id, context, delay)
-    await context.bot.send_message(
-        chat_id=chat_id,
-        text=text,
-        parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup(keyboard) if keyboard else None
-    )
-
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
-        [InlineKeyboardButton("🎓 Онлайн-школа", callback_data="school"),
-         InlineKeyboardButton("🏥 Клиника", callback_data="clinic")],
-        [InlineKeyboardButton("🏠 Недвижимость", callback_data="realty"),
-         InlineKeyboardButton("📈 Агентство", callback_data="agency")],
-        [InlineKeyboardButton("🔧 Сервис", callback_data="service"),
-         InlineKeyboardButton("👥 HR / Рекрутинг", callback_data="hr")],
-    ]
     user = update.message.from_user
     save_to_sheet([
         datetime.now().strftime("%d.%m.%Y %H:%M"),
@@ -332,299 +310,39 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "—",
         "bot_start"
     ])
-    if YOUR_CHAT_ID:
-        try:
-            await context.bot.send_message(
-                chat_id=YOUR_CHAT_ID,
-                text=f"👤 Новый пользователь зашёл в бота!\n\nИмя: {user.first_name}\nUsername: @{user.username or 'нет'}\nВремя: {datetime.now().strftime('%d.%m.%Y %H:%M')}"
-            )
-        except Exception as e:
-            logging.error(f"Notify error: {e}")
+
+    keyboard = [[
+        InlineKeyboardButton(
+            "🚀 Открыть Pulse AI",
+            web_app={"url": "https://dacotaj.github.io/pulse-miniapp/pulse_miniapp_v5.html"}
+        )
+    ]]
 
     await update.message.reply_text(
         "Привет! 👋\n\n"
-        "Я покажу как работает <b>Pulse</b> — система ежедневных отчётов "
-        "для владельцев бизнеса.\n\n"
-        "Это не презентация — я покажу всё вживую, как будто "
-        "вы уже подключены.\n\n"
-        "Выберите вашу нишу 👇",
+        "Я — <b>Pulse AI</b>, ежедневная аналитика роста и потерь для вашего бизнеса.\n\n"
+        "Нажмите кнопку ниже — и узнайте как это работает прямо сейчас 👇",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
 
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Старые callback кнопки — перенаправляем в Mini App"""
     query = update.callback_query
     await query.answer()
-
-    niche = query.data
-    chat_id = query.message.chat_id
-
-    if niche == "settings_demo":
-        await show_settings(chat_id, context)
-        return
-
-    if niche in ("settings_mode", "settings_freq", "settings_threshold", "settings_team"):
-        await handle_settings(niche, chat_id, context)
-        return
-
-    if niche in ("mode_full", "mode_report", "mode_alerts", "freq_1", "freq_2", "freq_3",
-                 "threshold_3", "threshold_5", "threshold_10", "team_yes", "team_no"):
-        await handle_settings(niche, chat_id, context)
-        return
-
-    if niche == "alert_snooze":
-        await send(chat_id, context,
-            "🔕 <b>Напомню через час</b>\n\n"
-            "Поставил напоминание на 12:34.\n"
-            "Если не обработаете — пришлю снова.",
-            delay=0.5)
-        return
-
-    if niche == "alert_done":
-        await send(chat_id, context,
-            "✅ <b>Отлично!</b>\n\n"
-            "Заявка отмечена как обработанная.\n"
-            "Так держать — ни один клиент не потерян 💪",
-            delay=0.5)
-        return
-
-    if niche == "alert_show_all":
-        await send(chat_id, context,
-            "📋 <b>Необработанные заявки:</b>\n"
-            "━━━━━━━━━━━━━━━━\n"
-            "1. Марина К. — ждёт 3 часа · 15 200 ₽\n"
-            "2. Сергей П. — ждёт 2.5 часа · 15 200 ₽\n"
-            "3. Анна В. — ждёт 2 часа · 15 200 ₽\n"
-            "4. Дмитрий Л. — ждёт 1.5 часа · 15 200 ₽\n"
-            "5. Ольга М. — ждёт 1 час · 15 200 ₽\n"
-            "━━━━━━━━━━━━━━━━\n"
-            "⚠️ В реальном боте — ваши данные из CRM",
-            delay=0.8)
-        return
-
-    if niche in ("tariff_start", "tariff_business"):
-        await send(chat_id, context,
-            "🔗 <b>Ссылка на оплату</b>\n\n"
-            "Оплата будет доступна в ближайшее время.\n\n"
-            "Пока можете написать напрямую 👇",
-            keyboard=[[InlineKeyboardButton("✍️ Написать напрямую", url=YOUR_TG)]],
-            delay=0.5)
-        return
-
-    user = query.from_user
-    data = NICHES.get(niche, NICHES["school"])
-
-    save_lead(user.username, user.first_name, niche)
-
-    if YOUR_CHAT_ID:
-        try:
-            niche_name = NICHES.get(niche, {}).get("name", niche)
-            await context.bot.send_message(
-                chat_id=YOUR_CHAT_ID,
-                text=f"🔥 Лид выбрал нишу!\n\nИмя: {user.first_name}\nUsername: @{user.username or 'нет'}\nНиша: {niche_name}\nВремя: {datetime.now().strftime('%d.%m.%Y %H:%M')}"
-            )
-        except Exception as e:
-            logging.error(f"Notify error: {e}")
-
-    await send(chat_id, context,
-        "☀️ <b>Доброе утро!</b>\n\nСобираю данные вашего бизнеса за вчера...",
-        delay=1.5)
-
-    await send(chat_id, context, data["report"], delay=2.5)
-
-    alert_keyboard = [
-        [InlineKeyboardButton("📋 Показать всех", callback_data="alert_show_all")],
-        [InlineKeyboardButton("🔕 Отложить на 1 час", callback_data="alert_snooze")],
-    ]
-    await send(chat_id, context, data["alert"], keyboard=alert_keyboard, delay=2.0)
-
-    await send(chat_id, context,
-        f"💡 <b>Кейс из вашей ниши:</b>\n\n<i>{data['case']}</i>",
-        delay=2.5)
-
-    await send(chat_id, context,
-        "⏰ А теперь представьте...\n\n"
-        "Вы на встрече. 11:30. И вдруг приходит это:",
-        delay=2.0)
-
-    realtime_keyboard = [
-        [InlineKeyboardButton("✅ Обработано", callback_data="alert_done")],
-        [InlineKeyboardButton("🔕 Отложить на 1 час", callback_data="alert_snooze")],
-    ]
-    await send(chat_id, context, data["realtime_alert"], keyboard=realtime_keyboard, delay=1.5)
-
-    await send(chat_id, context,
-        "Вы узнали о потере <b>до того</b>, как клиент ушёл.\n"
-        "Не вечером. Не в пятницу. Прямо сейчас.",
-        delay=2.0)
-
-    await send(chat_id, context,
-        "📅 А каждое воскресенье вечером приходит итог недели:",
-        delay=2.5)
-
-    await send(chat_id, context, data["weekly"], delay=1.5)
-
-    await send(chat_id, context,
-        "⚙️ И всё это настраивается прямо в боте.\nНажмите любую кнопку ниже — и увидите финал 👇\n\n"
-        "👇 Нажмите любую кнопку ниже — и увидите финал демо",
-        delay=2.5)
-
-    await show_settings(chat_id, context)
-
-
-async def show_settings(chat_id, context):
-    keyboard = [
-        [InlineKeyboardButton("📋 Режим отчётов", callback_data="settings_mode"),
-         InlineKeyboardButton("🕐 Частота", callback_data="settings_freq")],
-        [InlineKeyboardButton("🔔 Порог алерта", callback_data="settings_threshold"),
-         InlineKeyboardButton("👥 Командный режим", callback_data="settings_team")],
-    ]
-    await typing(chat_id, context, 1.0)
+    keyboard = [[
+        InlineKeyboardButton(
+            "🚀 Открыть Pulse AI",
+            web_app={"url": "https://dacotaj.github.io/pulse-miniapp/pulse_miniapp_v5.html"}
+        )
+    ]]
     await context.bot.send_message(
-        chat_id=chat_id,
-        text=(
-            "⚙️ <b>Настройки Pulse</b>\n"
-            "━━━━━━━━━━━━━━━━\n"
-            "Режим:        <b>Полный отчёт + алерты</b>\n"
-            "Время:        <b>09:00</b>\n"
-            "Порог алерта: <b>5 необработанных</b>\n"
-            "Команда:      <b>только вы</b>\n"
-            "━━━━━━━━━━━━━━━━\n"
-            "Нажмите чтобы изменить 👇"
-        ),
-        parse_mode="HTML",
+        chat_id=query.message.chat_id,
+        text="Откройте мини-приложение Pulse AI — там всё гораздо удобнее 👇",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
-
-async def handle_settings(niche, chat_id, context):
-    responses = {
-        "settings_mode": {
-            "text": "📋 <b>Режим отчётов</b>\n\nВыберите что присылать:",
-            "keyboard": [
-                [InlineKeyboardButton("✅ Полный отчёт + алерты", callback_data="mode_full")],
-                [InlineKeyboardButton("📊 Только отчёт (без алертов)", callback_data="mode_report")],
-                [InlineKeyboardButton("🔔 Только алерты", callback_data="mode_alerts")],
-            ]
-        },
-        "settings_freq": {
-            "text": "🕐 <b>Частота отчётов</b>\n\nСколько раз в день:",
-            "keyboard": [
-                [InlineKeyboardButton("1 раз · утром в 09:00", callback_data="freq_1")],
-                [InlineKeyboardButton("2 раза · 09:00 и 18:00", callback_data="freq_2")],
-                [InlineKeyboardButton("3 раза · 09:00, 13:00, 18:00", callback_data="freq_3")],
-            ]
-        },
-        "settings_threshold": {
-            "text": "🔔 <b>Порог алерта</b>\n\nПрисылать тревогу если необработанных больше:",
-            "keyboard": [
-                [InlineKeyboardButton("3 заявки", callback_data="threshold_3")],
-                [InlineKeyboardButton("5 заявок", callback_data="threshold_5")],
-                [InlineKeyboardButton("10 заявок", callback_data="threshold_10")],
-            ]
-        },
-        "settings_team": {
-            "text": "👥 <b>Командный режим</b>\n\nКому присылать отчёт:",
-            "keyboard": [
-                [InlineKeyboardButton("Только мне", callback_data="team_no")],
-                [InlineKeyboardButton("Мне + РОП / партнёр", callback_data="team_yes")],
-            ]
-        },
-        "mode_full": {"text": "✅ <b>Готово!</b> Режим: полный отчёт + алерты", "keyboard": None, "final": True},
-        "mode_report": {"text": "✅ <b>Готово!</b> Режим: только отчёт без алертов", "keyboard": None, "final": True},
-        "mode_alerts": {"text": "✅ <b>Готово!</b> Режим: только алерты при превышении порога", "keyboard": None, "final": True},
-        "freq_1": {"text": "✅ <b>Готово!</b> Отчёт будет приходить в 09:00", "keyboard": None, "final": True},
-        "freq_2": {"text": "✅ <b>Готово!</b> Отчёт будет приходить в 09:00 и 18:00", "keyboard": None, "final": True},
-        "freq_3": {"text": "✅ <b>Готово!</b> Отчёт будет приходить в 09:00, 13:00 и 18:00", "keyboard": None, "final": True},
-        "threshold_3": {"text": "✅ <b>Готово!</b> Алерт при 3+ необработанных заявках", "keyboard": None, "final": True},
-        "threshold_5": {"text": "✅ <b>Готово!</b> Алерт при 5+ необработанных заявках", "keyboard": None, "final": True},
-        "threshold_10": {"text": "✅ <b>Готово!</b> Алерт при 10+ необработанных заявках", "keyboard": None, "final": True},
-        "team_no": {"text": "✅ <b>Готово!</b> Отчёт приходит только вам", "keyboard": None, "final": True},
-        "team_yes": {"text": "✅ <b>Готово!</b> Добавьте Telegram вашего РОПа или партнёра — пришлём им тоже", "keyboard": None, "final": True},
-    }
-
-    r = responses.get(niche, {})
-    await send(chat_id, context, r["text"],
-               keyboard=r.get("keyboard"), delay=0.8)
-
-    if r.get("final"):
-        await asyncio.sleep(2)
-        await show_final_offer(chat_id, context)
-
-
-async def show_final_offer(chat_id, context):
-    keyboard = [
-        [InlineKeyboardButton("✅ Хочу так же на своих данных", url="https://pulse-pro.ru/#finalcta")],
-        [InlineKeyboardButton("✍️ Написать напрямую", url=YOUR_TG)],
-    ]
-    await send(chat_id, context,
-        "Вот и всё демо 🎯\n\n"
-        "Это именно то что вы получите:\n"
-        "— утренний отчёт каждый день в 09:00\n"
-        "— алерты когда что-то идёт не так\n"
-        "— еженедельная сводка\n"
-        "— настройки прямо в боте\n\n"
-        "<b>Подключаем за 1–3 дня на ваших реальных данных.\n"
-        "Первый отчёт — бесплатно.</b>",
-        keyboard=keyboard,
-        delay=1.5)
-
-    await asyncio.sleep(2)
-    await show_tariffs(chat_id, context)
-
-
-async def show_tariffs(chat_id, context):
-    await typing(chat_id, context, 1.0)
-    await context.bot.send_message(
-        chat_id=chat_id,
-        text=(
-            "💎 <b>START · 7 000 ₽/мес</b>\n"
-            "━━━━━━━━━━━━━━━━\n"
-            "— Ежедневный отчёт каждое утро в 09:00\n"
-            "— До 2 алертов\n"
-            "— 1 источник данных\n"
-            "— Запуск за 1–3 дня"
-        ),
-        parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("Выбрать START →", callback_data="tariff_start")]
-        ])
-    )
-
-    await asyncio.sleep(1.5)
-    await context.bot.send_message(
-        chat_id=chat_id,
-        text=(
-            "⭐ <b>BUSINESS · 15 000 ₽/мес</b>\n"
-            "━━━━━━━━━━━━━━━━\n"
-            "— Всё из START\n"
-            "— До 5 алертов, 3 источника\n"
-            "— Личный кабинет с историей\n"
-            "— AI отвечает на вопросы по вашим данным"
-        ),
-        parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("Выбрать BUSINESS →", callback_data="tariff_business")]
-        ])
-    )
-
-    await asyncio.sleep(1.5)
-    await context.bot.send_message(
-        chat_id=chat_id,
-        text=(
-            "🚀 <b>PRO · 25 000 ₽/мес</b>\n"
-            "━━━━━━━━━━━━━━━━\n"
-            "— Всё из BUSINESS\n"
-            "— AI сам замечает проблемы и говорит что делать\n"
-            "— Несколько направлений и филиалов\n"
-            "— Дашборд, PDF-отчёты, еженедельный созвон"
-        ),
-        parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("Обсудить PRO →", url=YOUR_TG)]
-        ])
-    )
 
 
 async def create_payment(request):
