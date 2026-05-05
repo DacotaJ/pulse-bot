@@ -34,7 +34,13 @@ CREDS_INFO = json.loads(_creds_json)
 
 
 
-MINI_APP_URL = "https://dacotaj.github.io/pulse-miniapp/pulse_miniapp_v5.html"
+import time
+
+MINI_APP_BASE = "https://dacotaj.github.io/pulse-miniapp/pulse_miniapp_v5.html"
+
+def get_mini_app_url():
+    """Добавляем timestamp чтобы Telegram не кэшировал страницу"""
+    return f"{MINI_APP_BASE}?t={int(time.time())}"
 
 
 def save_to_sheet(row):
@@ -57,7 +63,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "bot_start"
     ])
     keyboard = [[
-        InlineKeyboardButton("🚀 Открыть Pulse AI", web_app={"url": MINI_APP_URL})
+        InlineKeyboardButton("🚀 Открыть Pulse AI", web_app={"url": get_mini_app_url()})
     ]]
     await update.message.reply_text(
         "Привет! 👋\n\n"
@@ -72,7 +78,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     keyboard = [[
-        InlineKeyboardButton("🚀 Открыть Pulse AI", web_app={"url": MINI_APP_URL})
+        InlineKeyboardButton("🚀 Открыть Pulse AI", web_app={"url": get_mini_app_url()})
     ]]
     await context.bot.send_message(
         chat_id=query.message.chat_id,
