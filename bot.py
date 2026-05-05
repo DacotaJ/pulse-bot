@@ -102,9 +102,31 @@ async def create_payment(request):
         body = await request.json()
         amount = body.get("amount", 7000)
         description = body.get("description", "Pulse подписка")
+        email = body.get("email", "")
 
         import uuid
         idempotence_key = str(uuid.uuid4())
+
+        payment_body = {
+            "amount": {"value": str(amount) + ".00", "currency": "RUB"},
+            "confirmation": {"type": "embedded"},
+            "capture": True,
+            "description": description,
+        }
+
+        # Добавляем чек если есть email (обязательно при включённом 54-ФЗ)
+        if email:
+            payment_body["receipt"] = {
+                "customer": {"email": email},
+                "items": [{
+                    "description": description,
+                    "quantity": "1.00",
+                    "amount": {"value": str(amount) + ".00", "currency": "RUB"},
+                    "vat_code": 1,
+                    "payment_mode": "full_payment",
+                    "payment_subject": "service"
+                }]
+            }
 
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.post(
@@ -114,12 +136,7 @@ async def create_payment(request):
                     "Content-Type": "application/json",
                     "Idempotence-Key": idempotence_key,
                 },
-                json={
-                    "amount": {"value": str(amount) + ".00", "currency": "RUB"},
-                    "confirmation": {"type": "embedded"},
-                    "capture": True,
-                    "description": description,
-                },
+                json=payment_body,
             )
 
         data = resp.json()
