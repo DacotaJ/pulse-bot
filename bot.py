@@ -571,7 +571,11 @@ def main():
         app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
         # Ежедневная проверка подписок в 10:00
-        app.job_queue.run_daily(check_subscriptions, time=datetime.strptime("10:00", "%H:%M").time())
+        if app.job_queue:
+            from datetime import time as dt_time
+            app.job_queue.run_daily(check_subscriptions, time=dt_time(10, 0))
+        else:
+            logging.warning("JobQueue не доступен — установите python-telegram-bot[job-queue]")
         await app.initialize()
         await app.start()
         await app.updater.start_polling(allowed_updates=Update.ALL_TYPES)
