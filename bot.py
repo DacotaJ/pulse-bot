@@ -12,10 +12,10 @@ from datetime import datetime, timedelta
 from aiohttp import web
 
 # --- НАСТРОЙКИ ---
-BOT_TOKEN = "8564626704:AAH4u4qTJhmfg5qJGCIcZoSvl7gI6uJir3g"
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 SPREADSHEET_ID = "1hNQfcs-Zk2ZjanjuZP1yZDlPc3ADNbp0s9In_kFSHu4"
 SHEET_NAME = "Лиды с бота"
-YOUR_TG = "https://t.me/PulseReportBot"
+YOUR_TG = "https://t.me/PulseReportAIBot"
 OWNER_USERNAME = "dacotaj"
 OWNER_CHAT_ID = os.environ.get("OWNER_CHAT_ID", "")
 
