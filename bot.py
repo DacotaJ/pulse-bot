@@ -87,6 +87,7 @@ def save_subscription(chat_id, username, email, tariff, status, start_date, end_
     """
     start_date и end_date могут быть None — для статуса awaiting_setup.
     brief_sent_at — дата отправки брифа клиенту (для контроля онбординга).
+    Использует явную запись в колонки A-J чтобы избежать сдвига при расширении таблицы.
     """
     def fmt(d):
         if d is None or d == "":
@@ -98,21 +99,23 @@ def save_subscription(chat_id, username, email, tariff, status, start_date, end_
     try:
         sheet = get_subscriptions_sheet()
         rows = sheet.get_all_records()
-        # Обновляем если уже есть
-        for i, row in enumerate(rows, start=2):
-            if str(row.get("chat_id")) == str(chat_id):
-                sheet.update(f"A{i}:J{i}", [[
-                    str(chat_id), username, email, tariff, status,
-                    fmt(start_date), fmt(end_date), "нет",
-                    fmt(brief_sent_at), row.get("notes", "")
-                ]])
-                return
-        # Добавляем новую
-        sheet.append_row([
+        new_row_data = [
             str(chat_id), username, email, tariff, status,
             fmt(start_date), fmt(end_date), "нет",
             fmt(brief_sent_at), ""
-        ])
+        ]
+        # Обновляем если уже есть
+        for i, row in enumerate(rows, start=2):
+            if str(row.get("chat_id")) == str(chat_id):
+                # Сохраняем заметки если они уже были
+                existing_notes = row.get("notes", "")
+                new_row_data[9] = existing_notes
+                sheet.update(f"A{i}:J{i}", [new_row_data])
+                return
+        # Добавляем новую строку — явно в колонки A-J следующей пустой строки
+        # Считаем сколько уже строк (включая заголовок), пишем в следующую
+        next_row = len(rows) + 2  # rows без заголовка, +1 заголовок +1 следующая
+        sheet.update(f"A{next_row}:J{next_row}", [new_row_data])
     except Exception as e:
         logging.error(f"Subscription save error: {e}")
 
@@ -486,6 +489,11 @@ async def start_trial_endpoint(request):
     Триал не начинается автоматически — Евгения сама его запускает,
     когда настройка готова, проставляя статус trial и дату начала.
     Клиенту сразу шлём ссылку на бриф.
+
+    Возвращает:
+      already_pending: true  — заявка уже есть, ждём бриф / триал идёт
+      already_used: true     — клиент уже использовал триал (expired/cancelled/paid)
+      ok: true               — новая заявка создана
     """
     if request.method == "OPTIONS":
         return web.Response(headers={"Access-Control-Allow-Origin": "*",
@@ -498,12 +506,33 @@ async def start_trial_endpoint(request):
         name = body.get("name", "")
         tariff = body.get("tariff", "business")
 
-        # Проверяем дубль по chat_id — теперь учитываем и awaiting_setup
+        # Защита от пустого chat_id (если Telegram WebApp криво открылся)
+        if not chat_id:
+            return web.Response(
+                text='{"error":"no_chat_id","message":"Откройте мини-апп через Telegram"}',
+                content_type="application/json",
+                headers={"Access-Control-Allow-Origin": "*"}
+            )
+
+        # Проверяем дубли по chat_id — две разные ситуации
         subs = get_all_subscriptions()
         for sub in subs:
-            if str(sub.get("chat_id")) == chat_id and sub.get("статус") in ("awaiting_setup", "trial", "paid"):
+            if str(sub.get("chat_id")) != chat_id:
+                continue
+            existing_status = sub.get("статус", "")
+
+            # Ситуация 1: заявка/триал уже в процессе — показываем напоминание про бриф
+            if existing_status in ("awaiting_setup", "trial"):
                 return web.Response(
-                    text='{"already_exists":true}',
+                    text='{"already_pending":true,"status":"' + existing_status + '"}',
+                    content_type="application/json",
+                    headers={"Access-Control-Allow-Origin": "*"}
+                )
+
+            # Ситуация 2: триал уже использован (expired/cancelled/paid) — второй раз не даём
+            if existing_status in ("expired", "cancelled", "paid"):
+                return web.Response(
+                    text='{"already_used":true,"status":"' + existing_status + '"}',
                     content_type="application/json",
                     headers={"Access-Control-Allow-Origin": "*"}
                 )
@@ -520,10 +549,11 @@ async def start_trial_endpoint(request):
         try:
             client_text = (
                 f"🎉 <b>Спасибо, что выбрали Pulse!</b>\n\n"
-                f"Чтобы первый отчёт пришёл вам уже через 1–2 дня — "
-                f"заполните короткий бриф (5–7 минут):\n\n"
+                f"⚠️ <b>Триал начнётся после того как вы заполните бриф</b> (5–7 минут).\n\n"
+                f"Без брифа мы не сможем настроить отчёт под ваш бизнес — "
+                f"нам нужно знать вашу нишу, метрики и где живут данные.\n\n"
                 f"👉 {BRIEF_URL}\n\n"
-                f"После заполнения я лично подключаю инструмент под ваш бизнес. "
+                f"После заполнения я лично подключаю инструмент. "
                 f"Без созвонов, всё в этом чате.\n\n"
                 f"— Евгения, основатель Pulse"
             )
@@ -559,7 +589,7 @@ async def start_trial_endpoint(request):
                 logging.error(f"Trial notify error: {e}")
 
         return web.Response(
-            text='{"ok":true,"already_exists":false}',
+            text='{"ok":true,"already_pending":false,"already_used":false}',
             content_type="application/json",
             headers={"Access-Control-Allow-Origin": "*"}
         )
