@@ -19,6 +19,9 @@ YOUR_TG = "https://t.me/PulseReportAIBot"
 OWNER_USERNAME = "dacotaj"
 OWNER_CHAT_ID = os.environ.get("OWNER_CHAT_ID", "")
 
+# Бриф для нового клиента — гугл-форма
+BRIEF_URL = "https://forms.gle/kzasQhwH8kPHhEjb7"
+
 # Anthropic API ключ — берётся из переменных Railway
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 
@@ -62,31 +65,53 @@ def get_subscriptions_sheet():
     client = gspread.authorize(creds)
     try:
         sheet = client.open_by_key(SPREADSHEET_ID).worksheet(SUBSCRIPTIONS_SHEET)
+        # Проверяем что есть новые колонки I и J — добавляем если нет
+        try:
+            headers = sheet.row_values(1)
+            if len(headers) < 9 or "brief_sent_at" not in headers:
+                sheet.update_cell(1, 9, "brief_sent_at")
+            if len(headers) < 10 or "notes" not in headers:
+                sheet.update_cell(1, 10, "notes")
+        except Exception as e:
+            logging.warning(f"Headers update skipped: {e}")
     except Exception:
         # Создаём лист если нет
         spreadsheet = client.open_by_key(SPREADSHEET_ID)
-        sheet = spreadsheet.add_worksheet(SUBSCRIPTIONS_SHEET, rows=1000, cols=10)
-        sheet.append_row(["chat_id", "username", "email", "тариф", "статус", "дата_начала", "дата_окончания", "напоминание_отправлено"])
+        sheet = spreadsheet.add_worksheet(SUBSCRIPTIONS_SHEET, rows=1000, cols=12)
+        sheet.append_row(["chat_id", "username", "email", "тариф", "статус",
+                          "дата_начала", "дата_окончания", "напоминание_отправлено",
+                          "brief_sent_at", "notes"])
     return sheet
 
-def save_subscription(chat_id, username, email, tariff, status, start_date, end_date):
+def save_subscription(chat_id, username, email, tariff, status, start_date, end_date, brief_sent_at=None):
+    """
+    start_date и end_date могут быть None — для статуса awaiting_setup.
+    brief_sent_at — дата отправки брифа клиенту (для контроля онбординга).
+    """
+    def fmt(d):
+        if d is None or d == "":
+            return ""
+        if isinstance(d, str):
+            return d
+        return d.strftime("%d.%m.%Y")
+
     try:
         sheet = get_subscriptions_sheet()
         rows = sheet.get_all_records()
         # Обновляем если уже есть
         for i, row in enumerate(rows, start=2):
             if str(row.get("chat_id")) == str(chat_id):
-                sheet.update(f"A{i}:H{i}", [[
+                sheet.update(f"A{i}:J{i}", [[
                     str(chat_id), username, email, tariff, status,
-                    start_date.strftime("%d.%m.%Y"),
-                    end_date.strftime("%d.%m.%Y"), "нет"
+                    fmt(start_date), fmt(end_date), "нет",
+                    fmt(brief_sent_at), row.get("notes", "")
                 ]])
                 return
         # Добавляем новую
         sheet.append_row([
             str(chat_id), username, email, tariff, status,
-            start_date.strftime("%d.%m.%Y"),
-            end_date.strftime("%d.%m.%Y"), "нет"
+            fmt(start_date), fmt(end_date), "нет",
+            fmt(brief_sent_at), ""
         ])
     except Exception as e:
         logging.error(f"Subscription save error: {e}")
@@ -114,18 +139,72 @@ def update_subscription_status(chat_id, status, reminder_sent=None):
 
 
 async def check_subscriptions(context):
-    """Ежедневная проверка подписок — отключение и напоминания"""
+    """Ежедневная проверка подписок — отключение, напоминания, авторасчёт end_date.
+
+    Логика статусов:
+      awaiting_setup — клиент зарегистрировал триал, но настройка ещё не сделана.
+                       Триал не идёт, никаких напоминаний об окончании.
+                       Если висит >3 дней — уведомляю владельца.
+      trial         — триал активен. Если end_date пустой — считаем = start_date + 7.
+                       За 3 дня до конца — напоминание клиенту.
+                       После окончания — статус expired.
+      paid          — платная подписка. Аналогичная логика напоминаний и истечения.
+      expired/cancelled — пропускаем.
+    """
     today = datetime.now().date()
     subscriptions = get_all_subscriptions()
+    sheet = None  # ленивая инициализация чтобы не открывать таблицу зря
 
-    for sub in subscriptions:
+    for idx, sub in enumerate(subscriptions, start=2):  # строки в таблице с 2-й
         chat_id = sub.get("chat_id")
-        status = sub.get("статус")
+        status = sub.get("статус", "")
+        start_date_str = sub.get("дата_начала", "")
         end_date_str = sub.get("дата_окончания", "")
         reminder_sent = sub.get("напоминание_отправлено", "нет")
         tariff = sub.get("тариф", "")
+        brief_sent_str = sub.get("brief_sent_at", "")
 
-        if not chat_id or status == "expired":
+        if not chat_id or status in ("expired", "cancelled"):
+            continue
+
+        # ── awaiting_setup: триал не запущен, ничего клиенту не шлём ──
+        if status == "awaiting_setup":
+            # Уведомляем владельца если клиент висит >3 дней без настройки
+            if brief_sent_str and OWNER_CHAT_ID:
+                try:
+                    brief_sent = datetime.strptime(brief_sent_str, "%d.%m.%Y").date()
+                    days_waiting = (today - brief_sent).days
+                    # Шлём напоминание себе ровно на 3-й и 7-й день — чтобы не спамило
+                    if days_waiting in (3, 7):
+                        await context.bot.send_message(
+                            chat_id=OWNER_CHAT_ID,
+                            text=f"⏳ Клиент {chat_id} (@{sub.get('username','')}) "
+                                 f"уже {days_waiting} дн. в статусе awaiting_setup.\n"
+                                 f"Бриф отправлен {brief_sent_str}, настройка не сделана.\n\n"
+                                 f"Напомнить ему или подключить?",
+                            parse_mode="HTML"
+                        )
+                except Exception as e:
+                    logging.warning(f"Awaiting setup notify skip {chat_id}: {e}")
+            continue
+
+        # ── trial / paid: основная логика ──
+
+        # Авторасчёт end_date если он пустой а start_date уже стоит
+        if status == "trial" and start_date_str and not end_date_str:
+            try:
+                start_date = datetime.strptime(start_date_str, "%d.%m.%Y").date()
+                computed_end = start_date + timedelta(days=7)
+                if sheet is None:
+                    sheet = get_subscriptions_sheet()
+                sheet.update_cell(idx, 7, computed_end.strftime("%d.%m.%Y"))
+                end_date_str = computed_end.strftime("%d.%m.%Y")
+                logging.info(f"Auto end_date for {chat_id}: {end_date_str}")
+            except Exception as e:
+                logging.error(f"Auto end_date error {chat_id}: {e}")
+                continue
+
+        if not end_date_str:
             continue
 
         try:
@@ -401,7 +480,13 @@ async def claude_proxy(request):
 
 
 async def start_trial_endpoint(request):
-    """Запуск триала из мини аппа"""
+    """Запуск триала из мини-аппа.
+
+    Новая логика: записываем статус awaiting_setup (не trial!), даты пустые.
+    Триал не начинается автоматически — Евгения сама его запускает,
+    когда настройка готова, проставляя статус trial и дату начала.
+    Клиенту сразу шлём ссылку на бриф.
+    """
     if request.method == "OPTIONS":
         return web.Response(headers={"Access-Control-Allow-Origin": "*",
             "Access-Control-Allow-Methods": "POST, OPTIONS",
@@ -413,34 +498,61 @@ async def start_trial_endpoint(request):
         name = body.get("name", "")
         tariff = body.get("tariff", "business")
 
-        # Проверяем дубль по chat_id
+        # Проверяем дубль по chat_id — теперь учитываем и awaiting_setup
         subs = get_all_subscriptions()
         for sub in subs:
-            if str(sub.get("chat_id")) == chat_id and sub.get("статус") in ("trial", "paid"):
+            if str(sub.get("chat_id")) == chat_id and sub.get("статус") in ("awaiting_setup", "trial", "paid"):
                 return web.Response(
                     text='{"already_exists":true}',
                     content_type="application/json",
                     headers={"Access-Control-Allow-Origin": "*"}
                 )
 
-        start_date = datetime.now()
-        end_date = start_date + timedelta(days=7)
+        # Записываем заявку в статусе awaiting_setup, без дат
+        today = datetime.now()
+        save_subscription(chat_id, username, "", tariff, "awaiting_setup",
+                          start_date=None, end_date=None, brief_sent_at=today)
 
-        # Записываем триал
-        save_subscription(chat_id, username, "", tariff, "trial", start_date, end_date)
+        # Создаём отдельное приложение бота для отправки сообщений
+        bot_app = Application.builder().token(BOT_TOKEN).build()
 
-        # Уведомляем себя
+        # 1) Шлём клиенту приветствие со ссылкой на бриф
+        try:
+            client_text = (
+                f"🎉 <b>Спасибо, что выбрали Pulse!</b>\n\n"
+                f"Чтобы первый отчёт пришёл вам уже через 1–2 дня — "
+                f"заполните короткий бриф (5–7 минут):\n\n"
+                f"👉 {BRIEF_URL}\n\n"
+                f"После заполнения я лично подключаю инструмент под ваш бизнес. "
+                f"Без созвонов, всё в этом чате.\n\n"
+                f"— Евгения, основатель Pulse"
+            )
+            await bot_app.bot.send_message(
+                chat_id=chat_id,
+                text=client_text,
+                parse_mode="HTML",
+                disable_web_page_preview=False
+            )
+        except Exception as e:
+            logging.error(f"Send brief to client error {chat_id}: {e}")
+
+        # 2) Уведомляем владельца о новой заявке
         if OWNER_CHAT_ID:
             try:
-                bot_app = Application.builder().token(BOT_TOKEN).build()
                 await bot_app.bot.send_message(
                     chat_id=OWNER_CHAT_ID,
-                    text=f"🆕 <b>Новый триал!</b>\n\n"
+                    text=f"🆕 <b>Новая заявка на триал</b>\n\n"
                          f"👤 {name} (@{username})\n"
                          f"🆔 chat_id: {chat_id}\n"
                          f"💼 Тариф: {tariff.upper()}\n"
-                         f"📅 До: {end_date.strftime('%d.%m.%Y')}\n\n"
-                         f"<a href='tg://user?id={chat_id}'>Написать юзеру</a> — настрой сегодня!",
+                         f"📋 Статус: <b>awaiting_setup</b> (триал ещё не идёт)\n\n"
+                         f"✓ Бриф отправлен клиенту автоматически.\n\n"
+                         f"<b>Что делать дальше:</b>\n"
+                         f"1. Дождаться ответов на бриф\n"
+                         f"2. Подключить интеграцию руками\n"
+                         f"3. В таблице «Подписки» сменить статус на <b>trial</b> "
+                         f"и поставить дату_начала — бот сам посчитает дату_окончания (+7 дней)\n\n"
+                         f"<a href='tg://user?id={chat_id}'>Написать клиенту</a>",
                     parse_mode="HTML"
                 )
             except Exception as e:
