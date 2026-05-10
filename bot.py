@@ -555,7 +555,7 @@ async def start_trial_endpoint(request):
                 f"👉 {BRIEF_URL}\n\n"
                 f"После заполнения я лично подключаю инструмент. "
                 f"Без созвонов, всё в этом чате.\n\n"
-                f"— Евгения, основатель Pulse"
+                f"— Евгения, основательница Pulse"
             )
             await bot_app.bot.send_message(
                 chat_id=chat_id,
