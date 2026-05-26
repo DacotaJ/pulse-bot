@@ -191,23 +191,85 @@ async def check_subscriptions(context):
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.message.from_user
+    args = context.args  # параметры после /start (список)
+
+    # ── Обработка тарифа из миниаппа (start=tariff_business и т.п.) ──
+    chosen_tariff = None
+    if args and args[0].startswith("tariff_"):
+        candidate = args[0].replace("tariff_", "").lower()
+        if candidate in ["start", "business", "pro"]:
+            chosen_tariff = candidate
+
+    # ── Логируем в Sheets ──
+    log_note = f"bot_start_tariff_{chosen_tariff}" if chosen_tariff else "bot_start"
     save_to_sheet([
         datetime.now().strftime("%d.%m.%Y %H:%M"),
         f"@{user.username}" if user.username else "нет ника",
         user.first_name or "",
         "—",
-        "bot_start"
+        log_note
     ])
+
+    # ── Уведомляем Евгению ──
+    if OWNER_CHAT_ID:
+        try:
+            username_str = f"@{user.username}" if user.username else f"id {user.id}"
+            if chosen_tariff:
+                # Лид с выбранным тарифом — горячий
+                tariff_info = {
+                    "start": "Start · 7 000 ₽",
+                    "business": "Business · 15 000 ₽",
+                    "pro": "Pro · 25 000 ₽"
+                }.get(chosen_tariff, chosen_tariff.upper())
+                await context.bot.send_message(
+                    chat_id=OWNER_CHAT_ID,
+                    text=(
+                        f"🔥 <b>Новый горячий лид</b>\n\n"
+                        f"Выбрал тариф: <b>{tariff_info}</b>\n"
+                        f"Контакт: {username_str}\n"
+                        f"Имя: {user.first_name or '—'}\n"
+                        f"User ID: <code>{user.id}</code>\n\n"
+                        f"💡 Бриф он(а), скорее всего, тоже заполнит — проверь Google Form."
+                    ),
+                    parse_mode="HTML"
+                )
+            else:
+                # Обычный заход — холодный лид
+                await context.bot.send_message(
+                    chat_id=OWNER_CHAT_ID,
+                    text=f"👤 Зашёл в бот: {username_str} · {user.first_name or '—'}"
+                )
+        except Exception as e:
+            logging.warning(f"Failed to notify owner: {e}")
+
+    # ── Отвечаем юзеру ──
     keyboard = [[
-        InlineKeyboardButton("🚀 Открыть Pulse AI", web_app={"url": get_mini_app_url()})
+        InlineKeyboardButton("🚀 Открыть Pulse", web_app={"url": get_mini_app_url()})
     ]]
-    await update.message.reply_text(
-        "Привет! 👋\n\n"
-        "Я — <b>Pulse AI</b>, ежедневная аналитика роста и потерь для вашего бизнеса.\n\n"
-        "Нажмите кнопку ниже — и узнайте как это работает прямо сейчас 👇",
-        parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
+
+    if chosen_tariff:
+        # Юзер пришёл с выбранным тарифом — персональное приветствие от Евгении
+        tariff_display = {"start": "Start", "business": "Business", "pro": "Pro"}
+        tariff_name = tariff_display.get(chosen_tariff, chosen_tariff.capitalize())
+        await update.message.reply_text(
+            f"Привет! 👋\n\n"
+            f"Я — <b>Евгения</b>, основательница Pulse. Вижу, что вы выбрали тариф "
+            f"<b>{tariff_name}</b>.\n\n"
+            f"Сейчас свяжусь с вами лично — обсудим как подключить за 1–3 дня. "
+            f"Если ещё не заполнили бриф — можете открыть миниапп и завершить:",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    else:
+        # Обычный заход — стандартное приветствие
+        await update.message.reply_text(
+            "Привет! 👋\n\n"
+            "Я — <b>Pulse</b>, AI-аналитик. Помогаю владельцам бизнеса каждое утро "
+            "видеть полную картину: что выросло, что упало, где деньги под угрозой.\n\n"
+            "За 30 секунд покажу как это будет выглядеть в вашей нише ↓",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
 
 
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
