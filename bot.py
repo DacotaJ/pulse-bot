@@ -519,6 +519,123 @@ async def start_trial_endpoint(request):
             content_type="application/json", headers={"Access-Control-Allow-Origin": "*"})
 
 
+async def notify_lead_endpoint(request):
+    """Уведомление Евгении о важном действии лида в миниаппе.
+    Шлёт мгновенное сообщение в Telegram + пишет в Лиды с бота для истории."""
+    if request.method == "OPTIONS":
+        return web.Response(headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "POST, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type"
+        })
+    try:
+        body = await request.json()
+        event = body.get("event", "")
+        user_id = body.get("user_id", "")
+        username = body.get("username", "")
+        first_name = body.get("first_name", "")
+        last_name = body.get("last_name", "")
+        tariff = body.get("tariff", "")
+        details = body.get("details", "")
+        source = body.get("source", "")
+
+        # Игнорируем пустые и owner-тесты
+        if not user_id:
+            return web.json_response({"ok": True, "skipped": "no_user_id"},
+                headers={"Access-Control-Allow-Origin": "*"})
+        if OWNER_CHAT_ID and str(user_id) == str(OWNER_CHAT_ID):
+            return web.json_response({"ok": True, "skipped": "owner"},
+                headers={"Access-Control-Allow-Origin": "*"})
+
+        # Формируем читаемое представление
+        username_link = f"@{username}" if username else f"id {user_id}"
+        full_name = " ".join(filter(None, [first_name, last_name])) or "—"
+
+        EVENT_TEXTS = {
+            "выбрал_тариф": {
+                "icon": "🔥",
+                "title": "Лид выбрал тариф",
+                "extra": (f"Тариф: <b>{tariff.upper() if tariff else '—'}</b>\n"
+                          f"Дальше открывается форма брифа."),
+            },
+            "клик_бриф": {
+                "icon": "🎯",
+                "title": "Лид открыл форму брифа",
+                "extra": (f"Тариф: <b>{tariff.upper() if tariff else 'не выбран'}</b>\n"
+                          f"Если заполнит — придёт письмо от Google Forms."),
+            },
+            "клик_переоткрыть_бриф": {
+                "icon": "🔥🔥",
+                "title": "Лид ВЕРНУЛСЯ к брифу повторно",
+                "extra": (f"Тариф: <b>{tariff.upper() if tariff else 'не выбран'}</b>\n"
+                          f"⚡ Очень горячий сигнал — он уже видел форму и вернулся к ней. Напишите сейчас."),
+            },
+            "завершил_квиз": {
+                "icon": "✅",
+                "title": "Лид прошёл квиз до конца",
+                "extra": (f"Ответы: <code>{(details or '—')[:200]}</code>\n"
+                          f"Это горячий сигнал — он увидел персональный отчёт."),
+            }
+        }
+        ev = EVENT_TEXTS.get(event, {
+            "icon": "💡",
+            "title": f"Событие: {event}",
+            "extra": ""
+        })
+
+        source_line = f"\nИсточник: <code>{source}</code>" if source else ""
+
+        # Кнопка «Написать» только если есть username
+        reply_markup = None
+        if username:
+            keyboard = [[InlineKeyboardButton(
+                f"✍️ Написать {username_link}",
+                url=f"https://t.me/{username}"
+            )]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+
+        msg = (
+            f"{ev['icon']} <b>{ev['title']}</b>\n\n"
+            f"👤 {full_name} ({username_link})\n"
+            f"🆔 User ID: <code>{user_id}</code>"
+            f"{source_line}\n\n"
+            f"{ev['extra']}"
+        )
+
+        if OWNER_CHAT_ID:
+            try:
+                bot_app = Application.builder().token(BOT_TOKEN).build()
+                await bot_app.bot.send_message(
+                    chat_id=OWNER_CHAT_ID,
+                    text=msg,
+                    parse_mode="HTML",
+                    disable_web_page_preview=True,
+                    reply_markup=reply_markup
+                )
+            except Exception as e:
+                logging.error(f"Notify-lead send error: {e}")
+
+        # Запишем в «Лиды с бота» для истории
+        try:
+            save_to_sheet([
+                datetime.now().strftime("%d.%m.%Y %H:%M"),
+                f"@{username}" if username else f"id {user_id}",
+                full_name,
+                tariff or "—",
+                f"miniapp_{event}"
+            ])
+        except Exception as e:
+            logging.error(f"Notify-lead log error: {e}")
+
+        return web.json_response({"ok": True},
+            headers={"Access-Control-Allow-Origin": "*"})
+    except Exception as e:
+        logging.error(f"Notify-lead error: {e}")
+        return web.Response(status=500, text='{"error":"error"}',
+            content_type="application/json",
+            headers={"Access-Control-Allow-Origin": "*"})
+
+
 async def health(request):
     return web.Response(text="OK")
 
@@ -656,6 +773,8 @@ async def run_web():
     app.router.add_get("/health", health)
     app.router.add_post("/suggest", suggest_endpoint)
     app.router.add_route("OPTIONS", "/suggest", suggest_endpoint)
+    app.router.add_post("/notify-lead", notify_lead_endpoint)
+    app.router.add_route("OPTIONS", "/notify-lead", notify_lead_endpoint)
     runner = web.AppRunner(app)
     await runner.setup()
     port = int(os.environ.get("PORT", 8080))
